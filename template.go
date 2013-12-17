@@ -5,7 +5,6 @@ import (
 	"html"
 	"html/template"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+  "github.com/robfig/revel/template_engine"
 )
 
 var ERROR_CLASS = "hasError"
@@ -35,6 +35,12 @@ type Template interface {
 	Name() string
 	Content() []string
 	Render(wr io.Writer, arg interface{}) error
+}
+
+func init() {
+
+  template_engine.RegisterTemplater("", GoTemplater)
+
 }
 
 var invalidSlugPattern = regexp.MustCompile(`[^a-z0-9 _-]`)
@@ -180,10 +186,10 @@ func (loader *TemplateLoader) Refresh() *Error {
 		if len(splitDelims) != 2 {
 			log.Fatalln("app.conf: Incorrect format for template.delimiters")
 		}
+    template_engine.SetDelims(splitDelims)
 	}
 
 	// Walk through the template loader's paths and build up a template set.
-	var templateSet *template.Template = nil
 	for _, basePath := range loader.paths {
 		// Walk only returns an error if the template loader is completely unusable
 		// (namely, if one of the TemplateFuncs does not have an acceptable signature).
@@ -206,94 +212,46 @@ func (loader *TemplateLoader) Refresh() *Error {
 				return nil
 			}
 
-			var fileStr string
+      checkTemplateError := func(err error, name string) {
+        if err != nil && loader.compileError == nil {
+          switch err.(type) {
+          case template_engine.Error:
+            loader.compileError = &Error{
+              Title:       err.(template_engine.Error).Title,
+              Path:        err.(template_engine.Error).Path,
+              Description: err.(template_engine.Error).Description,
+              Line:        err.(template_engine.Error).Line,
+              SourceLines: err.(template_engine.Error).SourceLines,
+            }
+          case *Error:
+            _, line, description := parseTemplateError(err)
+            loader.compileError = &Error{
+              Title:       "Template Compilation Error",
+              Path:        name,
+              Description: description,
+              Line:        line,
+              SourceLines: []string{"not implemented"}, // strings.Split(fileStr, "\n"),
+            }
+            ERROR.Printf("Template compilation error (In %s around line %d):\n%s",
+            name, line, description)
+          }
+        }
+      }
 
-			// addTemplate allows the same template to be added multiple
-			// times with different template names.
-			addTemplate := func(templateName string) (err error) {
-				// Convert template names to use forward slashes, even on Windows.
-				if os.PathSeparator == '\\' {
-					templateName = strings.Replace(templateName, `\`, `/`, -1) // `
-				}
-
-				// If we already loaded a template of this name, skip it.
-				if _, ok := loader.templatePaths[templateName]; ok {
-					return nil
-				}
-				loader.templatePaths[templateName] = path
-
-				// Load the file if we haven't already
-				if fileStr == "" {
-					fileBytes, err := ioutil.ReadFile(path)
-					if err != nil {
-						ERROR.Println("Failed reading file:", path)
-						return nil
-					}
-
-					fileStr = string(fileBytes)
-				}
-
-				if templateSet == nil {
-					// Create the template set.  This panics if any of the funcs do not
-					// conform to expectations, so we wrap it in a func and handle those
-					// panics by serving an error page.
-					var funcError *Error
-					func() {
-						defer func() {
-							if err := recover(); err != nil {
-								funcError = &Error{
-									Title:       "Panic (Template Loader)",
-									Description: fmt.Sprintln(err),
-								}
-							}
-						}()
-						templateSet = template.New(templateName).Funcs(TemplateFuncs)
-						// If alternate delimiters set for the project, change them for this set
-						if splitDelims != nil && basePath == ViewsPath {
-							templateSet.Delims(splitDelims[0], splitDelims[1])
-						} else {
-							// Reset to default otherwise
-							templateSet.Delims("", "")
-						}
-						_, err = templateSet.Parse(fileStr)
-					}()
-
-					if funcError != nil {
-						return funcError
-					}
-
-				} else {
-					if splitDelims != nil && basePath == ViewsPath {
-						templateSet.Delims(splitDelims[0], splitDelims[1])
-					} else {
-						templateSet.Delims("", "")
-					}
-					_, err = templateSet.New(templateName).Parse(fileStr)
-				}
-				return err
-			}
 
 			templateName := path[len(basePath)+1:]
+      tmpl_info := &template_engine.TemplateInfo{templateName, path}
+
+      TRACE.Printf("Found template %s. Attempting to compile.\n", tmpl_info.Name)
+      err = template_engine.AddTemplate(tmpl_info)
+      checkTemplateError(err, tmpl_info.Name)
 
 			// Lower case the file name for case-insensitive matching
 			lowerCaseTemplateName := strings.ToLower(templateName)
+      tmpl_info.Name = lowerCaseTemplateName
+      err = template_engine.AddTemplate(tmpl_info)
+      checkTemplateError(err, tmpl_info.Name)
 
-			err = addTemplate(templateName)
-			err = addTemplate(lowerCaseTemplateName)
-
-			// Store / report the first error encountered.
-			if err != nil && loader.compileError == nil {
-				_, line, description := parseTemplateError(err)
-				loader.compileError = &Error{
-					Title:       "Template Compilation Error",
-					Path:        templateName,
-					Description: description,
-					Line:        line,
-					SourceLines: strings.Split(fileStr, "\n"),
-				}
-				ERROR.Printf("Template compilation error (In %s around line %d):\n%s",
-					templateName, line, description)
-			}
 			return nil
 		})
 
@@ -305,8 +263,47 @@ func (loader *TemplateLoader) Refresh() *Error {
 	}
 
 	// Note: compileError may or may not be set.
-	loader.templateSet = templateSet
+
+	loader.templateSet = template_engine.CompiledTemplates()
+  TRACE.Printf("Found Templates: %v", loader.templateSet)
 	return loader.compileError
+}
+
+/* The default templater function. Vast majority was borrowed from
+ * the old addTemplate function. Implements TemplateLoader */
+func GoTemplater(
+	templateName, templateStr string, delims []string) (tmpl *template.Template, err error) {
+
+	// Create the template.  This panics if any of the funcs do not
+	// conform to expectations, so we wrap it in a func and handle those
+	// panics by serving an error page.
+	var funcError *Error
+	func() {
+		defer func() {
+			if err := recover(); err != nil {
+				funcError = &Error{
+					Title:       "Panic (Template Loader)",
+					Description: fmt.Sprintln(err),
+				}
+			}
+		}()
+
+		tmpl = template.New(templateName).Funcs(TemplateFuncs)
+		// If alternate delimiters set for the project, change them for this set
+		if delims != nil {
+			tmpl.Delims(delims[0], delims[1])
+		} else {
+			// Reset to default otherwise
+			tmpl.Delims("", "")
+		}
+		_, err = tmpl.Parse(templateStr)
+	}()
+
+	if funcError != nil {
+		return
+	}
+
+	return
 }
 
 func (loader *TemplateLoader) WatchDir(info os.FileInfo) bool {
