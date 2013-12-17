@@ -9,6 +9,29 @@ import "strings"
 
 type TemplateLoader func(tmplName, tmplStr string, delims []string) (*template.Template, error)
 
+type Module struct {
+	Name      string
+	Extension string
+	Path      string
+}
+
+func NewModule(config_key string, value string) (module *Module) {
+	if !strings.HasPrefix(config_key, "template.handler.") {
+		return nil
+	}
+	fields := strings.Split(config_key, ".")
+	if len(fields) > 3 {
+		return nil
+	}
+
+	module = new(Module)
+	module.Extension = "." + fields[2]
+	module.Name = "template_" + fields[2]
+	module.Path = value
+
+	return
+}
+
 type TemplateEngine struct {
 	// template paths already seen
 	seen_paths map[string]string
