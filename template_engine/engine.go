@@ -5,7 +5,6 @@ import "path"
 import "fmt"
 import "log"
 import "io/ioutil"
-import "os"
 import "strings"
 
 type TemplateLoader func(tmplName, tmplStr string, delims []string) (*template.Template, error)
@@ -29,7 +28,7 @@ type Error struct {
 	SourceLines []string
 }
 
-func (e Error) Error() string {
+func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Title, e.Description)
 }
 
@@ -72,19 +71,15 @@ func RegisterTemplater(extension string, loader TemplateLoader) {
 func AddTemplate(info *TemplateInfo) (err error) {
 
 	var (
-		templateName, fileStr string
+		fileStr string
 	)
 
 	// Convert template names to use forward slashes, even on Windows.
-	if os.PathSeparator == '\\' {
-		templateName = strings.Replace(info.Name, `\`, `/`, -1) // `
-	}
-
 	// If we already loaded a template of this name, skip it.
-	if _, ok := engine.seen_paths[templateName]; ok {
+	if _, ok := engine.seen_paths[info.Name]; ok {
 		return nil
 	}
-	engine.seen_paths[templateName] = info.Path
+	engine.seen_paths[info.Name] = info.Path
 
 	// Load the file if we haven't already
 	if fileStr == "" {
@@ -99,9 +94,6 @@ func AddTemplate(info *TemplateInfo) (err error) {
 
 	// html is equivalent to no extension - the default
 	ext := path.Ext(info.Path)
-	if ext == "html" {
-		ext = ""
-	}
 
 	var loader TemplateLoader
 	var ok bool
@@ -121,7 +113,6 @@ func AddTemplate(info *TemplateInfo) (err error) {
 	}
 
 	if engine.TemplateSet == nil {
-		log.Printf("Adding template to template set: %v", template)
 		engine.TemplateSet = template
 	} else {
 		_, err := engine.TemplateSet.AddParseTree(info.Name, template.Tree)

@@ -2,6 +2,7 @@ package revel
 
 import (
 	"fmt"
+	"github.com/robfig/revel/template_engine"
 	"html"
 	"html/template"
 	"io"
@@ -13,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-  "github.com/robfig/revel/template_engine"
 )
 
 var ERROR_CLASS = "hasError"
@@ -38,9 +38,10 @@ type Template interface {
 }
 
 func init() {
-
-  template_engine.RegisterTemplater("", GoTemplater)
-
+	template_engine.RegisterTemplater(".html", GoTemplater)
+	template_engine.RegisterTemplater(".json", GoTemplater)
+	template_engine.RegisterTemplater(".xml", GoTemplater)
+	template_engine.RegisterTemplater(".txt", GoTemplater)
 }
 
 var invalidSlugPattern = regexp.MustCompile(`[^a-z0-9 _-]`)
@@ -186,7 +187,7 @@ func (loader *TemplateLoader) Refresh() *Error {
 		if len(splitDelims) != 2 {
 			log.Fatalln("app.conf: Incorrect format for template.delimiters")
 		}
-    template_engine.SetDelims(splitDelims)
+		template_engine.SetDelims(splitDelims)
 	}
 
 	// Walk through the template loader's paths and build up a template set.
@@ -212,46 +213,60 @@ func (loader *TemplateLoader) Refresh() *Error {
 				return nil
 			}
 
-      checkTemplateError := func(err error, name string) {
-        if err != nil && loader.compileError == nil {
-          switch err.(type) {
-          case template_engine.Error:
-            loader.compileError = &Error{
-              Title:       err.(template_engine.Error).Title,
-              Path:        err.(template_engine.Error).Path,
-              Description: err.(template_engine.Error).Description,
-              Line:        err.(template_engine.Error).Line,
-              SourceLines: err.(template_engine.Error).SourceLines,
-            }
-          case *Error:
-            _, line, description := parseTemplateError(err)
-            loader.compileError = &Error{
-              Title:       "Template Compilation Error",
-              Path:        name,
-              Description: description,
-              Line:        line,
-              SourceLines: []string{"not implemented"}, // strings.Split(fileStr, "\n"),
-            }
-            ERROR.Printf("Template compilation error (In %s around line %d):\n%s",
-            name, line, description)
-          }
-        }
-      }
+			var funcError *Error
 
+			checkTemplateError := func(err error, name string) {
+				if err != nil && loader.compileError == nil {
+					switch err.(type) {
+					case *template_engine.Error:
+						var typError = err.(*template_engine.Error)
+						loader.compileError = &Error{
+							Title:       typError.Title,
+							Path:        typError.Path,
+							Description: typError.Description,
+							Line:        typError.Line,
+							SourceLines: typError.SourceLines,
+						}
+					case *Error:
 
-			templateName := path[len(basePath)+1:]
-      tmpl_info := &template_engine.TemplateInfo{templateName, path}
+						if err.(*Error).Title == "Panic (Template Loader)" {
+							//Handle these differently
+							funcError = err.(*Error)
+						} else {
+							_, line, description := parseTemplateError(err)
+							loader.compileError = &Error{
+								Title:       "Template Compilation Error",
+								Path:        name,
+								Description: description,
+								Line:        line,
+								SourceLines: []string{"not implemented"}, // strings.Split(fileStr, "\n"),
+							}
+						}
+					}
 
-      TRACE.Printf("Found template %s. Attempting to compile.\n", tmpl_info.Name)
-      err = template_engine.AddTemplate(tmpl_info)
-      checkTemplateError(err, tmpl_info.Name)
+				}
+			}
+
+			var templateName string
+			templateName = path[len(basePath)+1:]
+			if os.PathSeparator == '\\' {
+				templateName = strings.Replace(templateName, `\`, `/`, -1) // `
+			}
+
+			tmpl_info := &template_engine.TemplateInfo{templateName, path}
+
+			err = template_engine.AddTemplate(tmpl_info)
+			checkTemplateError(err, tmpl_info.Name)
 
 			// Lower case the file name for case-insensitive matching
 			lowerCaseTemplateName := strings.ToLower(templateName)
-      tmpl_info.Name = lowerCaseTemplateName
-      err = template_engine.AddTemplate(tmpl_info)
-      checkTemplateError(err, tmpl_info.Name)
+			tmpl_info.Name = lowerCaseTemplateName
+			err = template_engine.AddTemplate(tmpl_info)
+			checkTemplateError(err, tmpl_info.Name)
 
+			if funcError != nil {
+				return funcError
+			}
 			return nil
 		})
 
@@ -262,10 +277,20 @@ func (loader *TemplateLoader) Refresh() *Error {
 		}
 	}
 
-	// Note: compileError may or may not be set.
+	if loader.compileError != nil {
+		ERROR.Printf("Template compilation error (In %s around line %d):\n%s",
+			loader.compileError.Path,
+			loader.compileError.Line,
+			loader.compileError.Description)
+	}
 
+	// Note: compileError may or may not be set.
 	loader.templateSet = template_engine.CompiledTemplates()
-  TRACE.Printf("Found Templates: %v", loader.templateSet)
+
+	TRACE.Printf("Found Templates: ", loader.templateSet)
+	for _, tmpl := range loader.templateSet.Templates() {
+		TRACE.Printf("  %s", tmpl.Name())
+	}
 	return loader.compileError
 }
 
