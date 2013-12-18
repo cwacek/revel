@@ -97,11 +97,30 @@ func AddTemplate(info *TemplateInfo) (err error) {
 		fileStr string
 	)
 
-	// Convert template names to use forward slashes, even on Windows.
+	// Strip the suffix from everything but the defaults,
+	// but keep track of the extension. This is so a
+	// search for Index.html will find Index.html.amber
+	// if that's what's supplied.
+	ext := path.Ext(info.Path)
+	switch ext {
+	case ".html":
+		fallthrough
+	case ".xml":
+		fallthrough
+	case ".txt":
+		fallthrough
+	case ".json":
+		break
+
+	default:
+		info.Name = strings.TrimSuffix(info.Name, ext)
+	}
+
 	// If we already loaded a template of this name, skip it.
 	if _, ok := engine.seen_paths[info.Name]; ok {
 		return nil
 	}
+
 	engine.seen_paths[info.Name] = info.Path
 
 	// Load the file if we haven't already
@@ -114,9 +133,6 @@ func AddTemplate(info *TemplateInfo) (err error) {
 
 		fileStr = string(fileBytes)
 	}
-
-	// html is equivalent to no extension - the default
-	ext := path.Ext(info.Path)
 
 	var loader TemplateLoader
 	var ok bool

@@ -178,6 +178,7 @@ func (loader *TemplateLoader) Refresh() *Error {
 
 	loader.compileError = nil
 	loader.templatePaths = map[string]string{}
+	template_engine.Clear()
 
 	// Set the template delimiters for the project if present, then split into left
 	// and right delimiters around a space character
