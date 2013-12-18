@@ -120,6 +120,7 @@ func AddTemplate(info *TemplateInfo) (err error) {
 	if _, ok := engine.seen_paths[info.Name]; ok {
 		return nil
 	}
+	log.Printf("Loading template %s from %s\n", info.Name, info.Path)
 
 	engine.seen_paths[info.Name] = info.Path
 
@@ -137,6 +138,7 @@ func AddTemplate(info *TemplateInfo) (err error) {
 	var loader TemplateLoader
 	var ok bool
 	if loader, ok = engine.handlers[ext]; !ok {
+		log.Printf("No known hander for %s to load %s", ext, info.Name)
 		return &Error{
 			Title:       "Template Load Error",
 			Path:        info.Path,
@@ -148,14 +150,17 @@ func AddTemplate(info *TemplateInfo) (err error) {
 
 	template, err := loader(info.Name, fileStr, engine.delims)
 	if err != nil {
+		log.Printf("Failed to load template: %v", err)
 		return err
 	}
+	log.Printf("Successfully loaded %s using %v", info.Name, loader)
 
 	if engine.TemplateSet == nil {
 		engine.TemplateSet = template
 	} else {
 		_, err := engine.TemplateSet.AddParseTree(info.Name, template.Tree)
 		if err != nil {
+			log.Printf("Failed to successfully add parse tree")
 			return err
 		}
 	}
