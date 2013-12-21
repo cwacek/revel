@@ -2,7 +2,7 @@ package revel
 
 import (
 	"fmt"
-	"github.com/robfig/revel/template_engine"
+	"github.com/robfig/revel/template_engines"
 	"html"
 	"html/template"
 	"io"
@@ -37,11 +37,10 @@ type Template interface {
 	Render(wr io.Writer, arg interface{}) error
 }
 
-func init() {
-	template_engine.RegisterTemplater(".html", GoTemplater)
-	template_engine.RegisterTemplater(".json", GoTemplater)
-	template_engine.RegisterTemplater(".xml", GoTemplater)
-	template_engine.RegisterTemplater(".txt", GoTemplater)
+var engine template_engines.TemplateEngine
+
+func SetTemplateEngine(e, template_engines.TemplateEngine) {
+	engine = e
 }
 
 var invalidSlugPattern = regexp.MustCompile(`[^a-z0-9 _-]`)
@@ -214,7 +213,7 @@ func (loader *TemplateLoader) Refresh() *Error {
 				return nil
 			}
 
-			var funcError *Error
+			var funcError *template_engines.TemplateFuncError
 
 			checkTemplateError := func(err error, name string) {
 				if err != nil && loader.compileError == nil {
@@ -228,6 +227,7 @@ func (loader *TemplateLoader) Refresh() *Error {
 							Line:        typError.Line,
 							SourceLines: typError.SourceLines,
 						}
+
 					case *Error:
 
 						if err.(*Error).Title == "Panic (Template Loader)" {
@@ -293,43 +293,6 @@ func (loader *TemplateLoader) Refresh() *Error {
 		TRACE.Printf("  %s", tmpl.Name())
 	}
 	return loader.compileError
-}
-
-/* The default templater function. Vast majority was borrowed from
- * the old addTemplate function. Implements TemplateLoader */
-func GoTemplater(
-	templateName, templateStr string, delims []string) (tmpl *template.Template, err error) {
-
-	// Create the template.  This panics if any of the funcs do not
-	// conform to expectations, so we wrap it in a func and handle those
-	// panics by serving an error page.
-	var funcError *Error
-	func() {
-		defer func() {
-			if err := recover(); err != nil {
-				funcError = &Error{
-					Title:       "Panic (Template Loader)",
-					Description: fmt.Sprintln(err),
-				}
-			}
-		}()
-
-		tmpl = template.New(templateName).Funcs(TemplateFuncs)
-		// If alternate delimiters set for the project, change them for this set
-		if delims != nil {
-			tmpl.Delims(delims[0], delims[1])
-		} else {
-			// Reset to default otherwise
-			tmpl.Delims("", "")
-		}
-		_, err = tmpl.Parse(templateStr)
-	}()
-
-	if funcError != nil {
-		return
-	}
-
-	return
 }
 
 func (loader *TemplateLoader) WatchDir(info os.FileInfo) bool {

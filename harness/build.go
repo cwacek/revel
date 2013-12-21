@@ -3,7 +3,6 @@ package harness
 import (
 	"fmt"
 	"github.com/robfig/revel"
-	"github.com/robfig/revel/template_engine"
 	"go/build"
 	"log"
 	"os"
@@ -27,7 +26,7 @@ func Build() (app *App, compileError *revel.Error) {
 	// First, clear the generated files (to avoid them messing with ProcessSource).
 	cleanSource("tmp", "routes")
 
-	var templateImports = make(map[string]*template_engine.Module)
+	var templateImports = make([]string, 2)
 
 	sourceInfo, compileError := ProcessSource(revel.CodePaths)
 	if compileError != nil {
@@ -39,21 +38,16 @@ func Build() (app *App, compileError *revel.Error) {
 		sourceInfo.InitImportPaths = append(sourceInfo.InitImportPaths, dbImportPath)
 	}
 
-	configured_handlers := revel.Config.Options("template.handler")
-	for _, key := range configured_handlers {
-		handler_import := revel.Config.StringDefault(key, "default")
-		if handler_import != "default" {
-			if _, err := revel.ResolveImportPath(handler_import); err != nil {
-				log.Fatalln("Failed to load module.  Import of", handler_import, "failed:", err)
-			} else {
-				// ResolveImportPath checks that an actual importable path
-				// was provided, but it gives an absolute path, so we actually
-				// use whatever the config file said.
-				mod := template_engine.NewModule(key, handler_import)
-				templateImports[mod.Name] = mod
-				revel.INFO.Printf("Loaded %s to handle '.%s'", mod.Path, mod.Name)
-			}
+	template_engine := revel.Config.Options("template.engine")
+	handler_import := revel.Config.StringDefault(key, "default")
+	if handler_import != "default" {
+		if err := revel.CheckTemplateModule(handler_import); err != nil {
+			log.Fatalln("Failed to load module.  Import of", handler_import, "failed:", err)
 		}
+
+	} else {
+		templateImports = []string{REVEL_IMPORT_PATH + "/template_engines/go_engine.go",
+			revel.ViewsPath}
 	}
 
 	// Generate two source files.
@@ -277,9 +271,7 @@ import (
   "github.com/robfig/revel/template_engine"
 	"github.com/robfig/revel"{{range $k, $v := $.ImportPaths}}
 	{{$v}} "{{$k}}"{{end}}
-  {{range $k, $v := $.TemplateEngines}}
-  {{$k}} "{{$v.Path}}"
-  {{end}}
+  tmpl_engine "{{$.TemplateEngines[0]}}"
 )
 
 var (
@@ -296,10 +288,8 @@ func main() {
 	flag.Parse()
 	revel.Init(*runMode, *importPath, *srcPath)
 	revel.INFO.Println("Running revel server")
-  {{range $n, $m := .TemplateEngines}}
-  template_engine.RegisterTemplater("{{$m.Extension}}", {{$n}}.LoadTemplate)
-  {{end}}
 
+  revel.SetTemplateEngine(tmpl_engine.InitializeEngine({{$.TemplateEngines[1]}}))
 
 	{{range $i, $c := .Controllers}}
 	revel.RegisterController((*{{index $.ImportPaths .ImportPath}}.{{.StructName}})(nil),
